@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Pagination } from "@/components/ui/pagination";
+import { useDebounced } from "@/hooks/useDebounced";
 import {
   Select,
   SelectContent,
@@ -28,35 +30,51 @@ import {
 import type { Task, TaskStatus } from "@/types/database";
 import { CreateTaskDialog } from "./admin/CreateTaskDialog";
 
+const PAGE_SIZE = 20;
+
 export function TasksPage() {
   const { isAdmin } = useAuth();
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search, 300);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
+  const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
 
-  const { data = [], isLoading } = useQuery({
-    queryKey: ["tasks", isAdmin, statusFilter],
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, statusFilter]);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["tasks", isAdmin, statusFilter, debouncedSearch, page],
     queryFn: async () => {
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
       let q = supabase
         .from("tasks")
-        .select("*, assignee:profiles!tasks_assigned_to_fkey(full_name, email)")
-        .order("created_at", { ascending: false });
+        .select("*, assignee:profiles!tasks_assigned_to_fkey(full_name, email)", {
+          count: "exact",
+        })
+        .order("created_at", { ascending: false })
+        .range(from, to);
       if (statusFilter !== "all") q = q.eq("status", statusFilter);
-      const { data, error } = await q;
+      const term = debouncedSearch.trim();
+      if (term) {
+        const escaped = term.replace(/[%,]/g, "\\$&");
+        q = q.or(`title.ilike.%${escaped}%,description.ilike.%${escaped}%`);
+      }
+      const { data, error, count } = await q;
       if (error) throw error;
-      return data as Array<Task & { assignee: { full_name: string; email: string } | null }>;
+      return {
+        rows: (data ?? []) as Array<
+          Task & { assignee: { full_name: string; email: string } | null }
+        >,
+        total: count ?? 0,
+      };
     },
   });
 
-  const filtered = data.filter((t) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      t.title.toLowerCase().includes(q) ||
-      (t.description ?? "").toLowerCase().includes(q) ||
-      (t.assignee?.full_name ?? "").toLowerCase().includes(q)
-    );
-  });
+  const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
 
   return (
     <div className="space-y-6">
@@ -103,7 +121,7 @@ export function TasksPage() {
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Đang tải...</p>
-      ) : filtered.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center text-sm text-muted-foreground">
             Không có công việc nào.
@@ -111,7 +129,7 @@ export function TasksPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {filtered.map((t) => {
+          {rows.map((t) => {
             const overdue = isOverdue(t.deadline, t.status);
             return (
               <Link key={t.id} to={`/tasks/${t.id}`}>
@@ -155,6 +173,10 @@ export function TasksPage() {
             );
           })}
         </div>
+      )}
+
+      {!isLoading && total > 0 && (
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
       )}
 
       {isAdmin && <CreateTaskDialog open={createOpen} onOpenChange={setCreateOpen} />}
