@@ -32,4 +32,6 @@ jobs:
           echo "VITE_SUPABASE_ANON_KEY=placeholder" >> .env
 
       - run: pnpm tsc --noEmit
+      - run: pnpm lint
+      - run: pnpm test
       - run: pnpm build
