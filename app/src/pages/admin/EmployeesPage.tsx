@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, Plus, RefreshCw, Search, ShieldOff, UserCog } from "lucide-react";
@@ -41,37 +41,51 @@ import {
 import { adminUpdateUser } from "@/lib/admin";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { Pagination } from "@/components/ui/pagination";
+import { useDebounced } from "@/hooks/useDebounced";
+
+const PAGE_SIZE = 20;
 
 export function EmployeesPage() {
   const qc = useQueryClient();
   const { profile: me } = useAuth();
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search, 300);
+  const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [resetting, setResetting] = useState<Profile | null>(null);
   const [disabling, setDisabling] = useState<Profile | null>(null);
 
-  const { data = [], isLoading, refetch } = useQuery({
-    queryKey: ["profiles"],
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["profiles", debouncedSearch, page],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      let q = supabase
         .from("profiles")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
+      const term = debouncedSearch.trim();
+      if (term) {
+        const escaped = term.replace(/[%,]/g, "\\$&");
+        q = q.or(
+          `full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,department.ilike.%${escaped}%`,
+        );
+      }
+      const { data, error, count } = await q;
       if (error) throw error;
-      return data as Profile[];
+      return { rows: (data ?? []) as Profile[], total: count ?? 0 };
     },
   });
 
-  const filtered = data.filter((p) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      p.full_name.toLowerCase().includes(q) ||
-      p.email.toLowerCase().includes(q) ||
-      (p.department ?? "").toLowerCase().includes(q)
-    );
-  });
+  const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
 
   const onToggleActive = async (p: Profile) => {
     try {
@@ -135,14 +149,14 @@ export function EmployeesPage() {
                     Đang tải...
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
                     Không có nhân viên.
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((p) => (
+                rows.map((p) => (
                   <TableRow key={p.id}>
                     <TableCell>
                       <Link to={`/employees/${p.id}`} className="flex items-center gap-2 hover:underline">
@@ -203,6 +217,9 @@ export function EmployeesPage() {
               )}
             </TableBody>
           </Table>
+          {!isLoading && total > 0 && (
+            <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+          )}
         </CardContent>
       </Card>
 

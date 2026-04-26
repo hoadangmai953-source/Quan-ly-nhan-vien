@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellOff } from "lucide-react";
@@ -7,25 +8,35 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
 import type { Notification } from "@/types/database";
 import { formatRelative } from "@/lib/utils";
+import { Pagination } from "@/components/ui/pagination";
+
+const PAGE_SIZE = 30;
 
 export function NotificationsPage() {
   const { session } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [page, setPage] = useState(0);
 
-  const { data = [] } = useQuery({
-    queryKey: ["all-notifications", session?.user.id],
+  const { data } = useQuery({
+    queryKey: ["all-notifications", session?.user.id, page],
     enabled: !!session?.user.id,
     queryFn: async () => {
-      const { data, error } = await supabase
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      const { data, error, count } = await supabase
         .from("notifications")
-        .select("*")
+        .select("*", { count: "exact" })
         .eq("user_id", session!.user.id)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(from, to);
       if (error) throw error;
-      return data as Notification[];
+      return { rows: (data ?? []) as Notification[], total: count ?? 0 };
     },
   });
+
+  const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -49,7 +60,7 @@ export function NotificationsPage() {
         </Button>
       </div>
 
-      {data.length === 0 ? (
+      {rows.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
             <BellOff className="h-8 w-8" />
@@ -58,7 +69,7 @@ export function NotificationsPage() {
         </Card>
       ) : (
         <ul className="space-y-1">
-          {data.map((n) => (
+          {rows.map((n) => (
             <li key={n.id}>
               <Card
                 className="cursor-pointer transition-colors hover:bg-accent/40"
@@ -82,6 +93,10 @@ export function NotificationsPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {total > 0 && (
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
       )}
     </div>
   );
